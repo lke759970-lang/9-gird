@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>朋友圈九宫格切图神器</title>
+    <style>
+        /* 全局样式重置 */
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f7f7f7;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        h1 { margin-bottom: 20px; font-size: 1.5rem; font-weight: 600; color: #222; }
+        p.hint { font-size: 0.9rem; color: #666; margin-bottom: 20px; text-align: center; }
+
+        /* 主操作区容器 */
+        .main-container {
+            background: #fff;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            width: 100%;
+            max-width: 500px; /* 限制最大宽度，平板/电脑上看也不至于太宽 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* 预览区域 - 核心的正方形容器 */
+        .preview-box-wrapper {
+            width: 100%;
+            position: relative;
+            /* 通过 padding-bottom 实现响应式正方形占位 */
+            padding-bottom: 100%; 
+            background-color: #eee;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            border: 2px dashed #ddd;
+        }
+
+        /* 实际显示 Canvas 和网格线的容器 */
+        .preview-box {
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 隐藏的文件上传 input */
+        #fileInput { display: none; }
+
+        /* 预览用的 Canvas (不直接显示，用于处理逻辑) */
+        #sourceCanvas {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+            z-index: 1;
+            opacity: 0; /* 默认隐藏，上传后显示 */
+            transition: opacity 0.3s;
+        }
+
+        /* 九宫格辅助线 */
+        .grid-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 2;
+            pointer-events: none; /* 不阻挡点击 */
+            display: none; /* 默认隐藏，有图时显示 */
+        }
+        .grid-overlay::before, .grid-overlay::after {
+            content: ''; position: absolute; background: rgba(255, 255, 255, 0.6);
+        }
+        /* 横线 */
+        .grid-overlay::before {
+            top: 33.33%; height: 33.33%; width: 100%;
+            border-top: 1px solid rgba(255, 255, 255, 0.8);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.8);
+        }
+        /* 竖线 */
+        .grid-overlay::after {
+            left: 33.33%; width: 33.33%; height: 100%;
+            border-left: 1px solid rgba(255, 255, 255, 0.8);
+            border-right: 1px solid rgba(255, 255, 255, 0.8);
+        }
+
+        /* 按钮样式 */
+        .btn-group { width: 100%; display: flex; gap: 10px; }
+        .btn {
+            flex: 1;
+            padding: 12px 0;
+            border: none; border-radius: 8px;
+            font-size: 1rem; font-weight: 500;
+            cursor: pointer; transition: background-color 0.2s;
+            text-align: center;
+        }
+        .btn-upload { background-color: #f0f0f0; color: #333; }
+        .btn-cut { background-color: #07c160; color: white; } /* 微信绿 */
+        .btn-upload:active { background-color: #e0e0e0; }
+        .btn-cut:active { background-color: #06ad56; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* 结果展示区域 */
+        #resultContainer {
+            margin-top: 30px;
+            width: 100%;
+            max-width: 500px;
+            display: none; /* 默认隐藏 */
+        }
+        .result-title {
+            font-size: 1rem; font-weight: bold; margin-bottom: 10px; text-align: center;
+        }
+        .result-tip {
+            font-size: 0.85rem; color: #f56c6c; text-align: center; margin-bottom: 15px;
+        }
+        /* 结果九宫格布局 */
+        .grid-results {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px; /* 设置图片间距，模拟朋友圈效果 */
+            padding: 5px;
+            background: #fff;
+            border-radius: 8px;
+        }
+        .grid-results img {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 4px;
+            /* 添加轻微的点击反馈 */
+            transition: transform 0.1s;
+        }
+        .grid-results img:active { transform: scale(0.98); }
+
+        /* 初始提示文字 */
+        .placeholder-text {
+            position: absolute; z-index: 0; color: #999; font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>朋友圈九宫格切图</h1>
+    <p class="hint">将长方形图片自动居中裁剪为正方形并切成9份</p>
+
+    <div class="main-container">
+        <div class="preview-box-wrapper">
+            <div class="preview-box">
+                <span class="placeholder-text" id="placeholderText">请先上传图片</span>
+                <canvas id="sourceCanvas"></canvas>
+                <div class="grid-overlay" id="gridOverlay"></div>
+            </div>
+        </div>
+
+        <input type="file" id="fileInput" accept="image/*">
+        
+        <div class="btn-group">
+            <button class="btn btn-upload" onclick="document.getElementById('fileInput').click()">选图</button>
+            <button class="btn btn-cut" id="cutBtn" disabled>一键切图</button>
+        </div>
+    </div>
+
+    <div id="resultContainer">
+        <div class="result-title">切图完成!</div>
+        <p class="result-tip">请长按下方每张小图保存到相册</p>
+        <div class="grid-results" id="gridResults">
+            </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const sourceCanvas = document.getElementById('sourceCanvas');
+        const ctx = sourceCanvas.getContext('2d');
+        const cutBtn = document.getElementById('cutBtn');
+        const gridResults = document.getElementById('gridResults');
+        const resultContainer = document.getElementById('resultContainer');
+        const placeholderText = document.getElementById('placeholderText');
+        const gridOverlay = document.getElementById('gridOverlay');
+
+        let uploadedImage = null;
+        // 用于实际切图的正方形边长（基于原图分辨率）
+        let cropSize = 0; 
+        // 正方形在原图中的起始坐标偏移量
+        let offsetX = 0;
+        let offsetY = 0;
+
+        // 1. 监听文件上传
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                uploadedImage = new Image();
+                uploadedImage.onload = function() {
+                    // 图片加载完成，开始处理预览
+                    initCanvasPreview();
+                };
+                uploadedImage.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // 2. 初始化画布预览（核心：计算居中裁剪区域）
+        function initCanvasPreview() {
+            const imgW = uploadedImage.width;
+            const imgH = uploadedImage.height;
+            
+            // 计算最短边，作为正方形的边长
+            cropSize = Math.min(imgW, imgH);
+
+            // 计算居中裁剪的偏移量
+            offsetX = (imgW - cropSize) / 2;
+            offsetY = (imgH - cropSize) / 2;
+
+            // 设置 Canvas 的分辨率为裁剪后的正方形大小
+            // 这样能保证切出来的图是高清的原图分辨率
+            sourceCanvas.width = cropSize;
+            sourceCanvas.height = cropSize;
+
+            // 在 Canvas 上绘制原图的中心正方形区域
+            // drawImage参数: 图片对象, 原图开始剪切x, 原图开始剪切y, 原图剪切宽, 原图剪切高, 画布放置x, 画布放置y, 画布放置宽, 画布放置高
+            ctx.drawImage(uploadedImage, offsetX, offsetY, cropSize, cropSize, 0, 0, cropSize, cropSize);
+
+            // 更新界面状态
+            sourceCanvas.style.opacity = 1;
+            placeholderText.style.display = 'none';
+            gridOverlay.style.display = 'block';
+            cutBtn.disabled = false;
+            resultContainer.style.display = 'none'; // 重新上传时隐藏之前的结果
+            
+            // 滚动到预览区
+            document.querySelector('.main-container').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 3. 执行切图操作
+        cutBtn.addEventListener('click', function() {
+            if (!uploadedImage || cropSize === 0) return;
+
+            gridResults.innerHTML = ''; // 清空旧结果
+            
+            // 计算每一小块的边长
+            const pieceSize = cropSize / 3;
+
+            // 双重循环进行切图 (3x3)
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 3; col++) {
+                    // 创建一个新的临时 Canvas 用于存放这一小块
+                    const pieceCanvas = document.createElement('canvas');
+                    pieceCanvas.width = pieceSize;
+                    pieceCanvas.height = pieceSize;
+                    const pieceCtx = pieceCanvas.getContext('2d');
+
+                    // 计算这一小块在源 Canvas 上的坐标
+                    const sourceX = col * pieceSize;
+                    const sourceY = row * pieceSize;
+
+                    // 从源 Canvas 上截取这一块，绘制到临时 Canvas 上
+                    pieceCtx.drawImage(sourceCanvas, sourceX, sourceY, pieceSize, pieceSize, 0, 0, pieceSize, pieceSize);
+
+                    // 将临时 Canvas 转为图片元素
+                    const img = document.createElement('img');
+                    img.src = pieceCanvas.toDataURL('image/jpeg', 0.9); // 使用高质量 JPEG
+                    img.alt = `切片 ${row * 3 + col + 1}`;
+                    
+                    // 添加到结果区域
+                    gridResults.appendChild(img);
+                }
+            }
+
+            // 显示结果区域并滚动
+            resultContainer.style.display = 'block';
+            resultContainer.scrollIntoView({ behavior: 'smooth' });
+            
+            // 切图后禁用按钮防止重复点击
+            // cutBtn.disabled = true; 
+        });
+
+    </script>
+</body>
+</html>
